@@ -25,7 +25,13 @@ $env:HF_API_KEY = 'hf_YOUR_TOKEN_HERE'
 $env:HF_MODEL = 'Qwen/Qwen2.5-7B-Instruct'
 ```
 
-To persist these across sessions, set them as user or system environment variables via `sysdm.cpl` > Advanced > Environment Variables.
+These only last for the current session. To persist `HF_API_KEY` across sessions (for your user account), run:
+
+```powershell
+[System.Environment]::SetEnvironmentVariable('HF_API_KEY', 'hf_YOUR_TOKEN_HERE', 'User')
+```
+
+Alternatively, set it as a user or system environment variable via `sysdm.cpl` > Advanced > Environment Variables. Use the `Machine` scope (or the SYSTEM-level GUI setting) instead of `User` if you're running the agent from a scheduled task under the SYSTEM account (see [Schedule a weekly run](#4-optional-schedule-a-weekly-run)).
 
 ### 2. PowerShell script setup
 
