@@ -43,9 +43,12 @@ try
     }
 
     // 2. Send scan output to Hugging Face for AI analysis ─────────────────────
-    Log($"Sending scan to Hugging Face ({model})...");
+    Log($"Sending scan to Hugging Face (preferred model: {model})...");
     var hfClient = HuggingFaceClient.Create(apiKey, model);
     var advice   = await hfClient.GetMaintenanceAdviceAsync(scan.RawOutput, cts.Token);
+    var usedModel = hfClient.LastUsedModel ?? model;
+    if (usedModel != model)
+        Log($"Preferred model unavailable; fell back to: {usedModel}");
 
     Console.WriteLine();
     Console.WriteLine("══ AI RECOMMENDATIONS ══════════════════════════════════════════");
@@ -54,7 +57,7 @@ try
 
     // 3. Save combined Markdown report ────────────────────────────────────────
     var writer     = new ReportWriter(ReportDir);
-    var reportPath = writer.WriteWeeklyReport(scan.RawOutput, advice, model);
+    var reportPath = writer.WriteWeeklyReport(scan.RawOutput, advice, usedModel);
     Log($"Report saved: {reportPath}");
 
     return 0;

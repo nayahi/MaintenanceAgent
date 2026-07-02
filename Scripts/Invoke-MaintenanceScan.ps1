@@ -209,6 +209,95 @@ $SafeCategories = @(
             "$env:LOCALAPPDATA\TechSmith\Snagit\CrashDumps"
         )
         Mode    = 'Folder'
+    },
+    [ordered]@{
+        Label   = 'Docker unused data (build cache, dangling images/containers)'
+        Note    = 'Safe subset only: stopped containers, dangling images/networks, unused build cache. Volumes and in-use tagged images are never touched. Size not measured in scan mode -- run "docker system df" to preview. Skipped automatically if Docker is not installed or not running.'
+        Paths   = @()
+        Mode    = 'Command'
+        Command = {
+            $docker = (Get-Command docker -ErrorAction SilentlyContinue)?.Source
+            if (-not $docker) { Write-Report "  docker CLI not found, skipping" 'WARN'; return }
+            & $docker info *> $null
+            if ($LASTEXITCODE -ne 0) { Write-Report "  Docker daemon not running, skipping" 'WARN'; return }
+            & $docker system prune -f 2>&1  | ForEach-Object { Write-Report "  docker: $_" }
+            & $docker builder prune -f 2>&1 | ForEach-Object { Write-Report "  docker: $_" }
+        }
+    },
+    [ordered]@{
+        Label   = 'Windows Update component store (WinSxS superseded versions)'
+        Note    = 'Runs DISM /StartComponentCleanup -- conservative, keeps rollback ability for recent updates. Requires admin (skipped otherwise). Size not measured in scan mode: the WinSxS folder size overstates real reclaimable space due to hard links. Run "DISM /Online /Cleanup-Image /AnalyzeComponentStore" for an accurate estimate.'
+        Paths   = @()
+        Mode    = 'Command'
+        Command = {
+            if (-not $isAdmin) { Write-Report "  Requires admin, skipping" 'WARN'; return }
+            Dism.exe /Online /Cleanup-Image /StartComponentCleanup /Quiet /NoRestart 2>&1 |
+                ForEach-Object { Write-Report "  dism: $_" }
+        }
+    },
+    [ordered]@{
+        Label   = 'Recycle Bin'
+        Note    = 'Permanently empties the Recycle Bin (Clear-RecycleBin) -- files are not recoverable after this.'
+        Paths   = @("$env:SystemDrive\`$Recycle.Bin")
+        Mode    = 'Command'
+        Command = {
+            Clear-RecycleBin -Force -ErrorAction SilentlyContinue
+        }
+    },
+    [ordered]@{
+        Label   = 'Windows Update download cache'
+        Note    = 'Stops the Windows Update service, clears cached update files, restarts the service. Windows re-downloads as needed. Requires admin (skipped otherwise).'
+        Paths   = @("$env:windir\SoftwareDistribution\Download")
+        Mode    = 'Command'
+        Command = {
+            if (-not $isAdmin) { Write-Report "  Requires admin, skipping" 'WARN'; return }
+            Stop-Service wuauserv -Force -ErrorAction SilentlyContinue
+            Get-ChildItem "$env:windir\SoftwareDistribution\Download" -Force -ErrorAction SilentlyContinue |
+                Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+            Start-Service wuauserv -ErrorAction SilentlyContinue
+        }
+    },
+    [ordered]@{
+        Label   = 'Explorer thumbnail/icon cache'
+        Note    = 'Rebuilds automatically; thumbnails regenerate as you browse folders.'
+        Paths   = @("$env:LOCALAPPDATA\Microsoft\Windows\Explorer")
+        Mode    = 'Folder'
+    },
+    [ordered]@{
+        Label   = 'pip cache'
+        Note    = 'Runs: pip cache purge'
+        Paths   = @("$env:LOCALAPPDATA\pip\Cache")
+        Mode    = 'Command'
+        Command = {
+            $pip = (Get-Command pip -ErrorAction SilentlyContinue)?.Source
+            if ($pip) { & $pip cache purge 2>&1 | ForEach-Object { Write-Report "  pip: $_" } }
+            else { Write-Report "  pip not found, deleting cache folder directly" 'WARN' }
+        }
+    },
+    [ordered]@{
+        Label   = 'Yarn cache'
+        Note    = 'Runs: yarn cache clean'
+        Paths   = @(
+            "$env:LOCALAPPDATA\Yarn\Cache",
+            "$env:LOCALAPPDATA\Yarn\Berry\cache"
+        )
+        Mode    = 'Command'
+        Command = {
+            $yarn = (Get-Command yarn -ErrorAction SilentlyContinue)?.Source
+            if ($yarn) { & $yarn cache clean 2>&1 | ForEach-Object { Write-Report "  yarn: $_" } }
+            else { Write-Report "  yarn not found, deleting cache folder directly" 'WARN' }
+        }
+    },
+    [ordered]@{
+        Label   = 'VS Code cache'
+        Note    = 'Close VS Code before cleaning'
+        Paths   = @(
+            "$env:APPDATA\Code\Cache",
+            "$env:APPDATA\Code\CachedData",
+            "$env:APPDATA\Code\Code Cache",
+            "$env:APPDATA\Code\GPUCache"
+        )
+        Mode    = 'Folder'
     }
 )
 
@@ -232,6 +321,34 @@ $ConditionalCategories = @(
             } else {
                 Write-Report "  WSL Ubuntu is not Stopped (state: $state) — skipping compact" 'WARN'
             }
+        }
+    },
+    [ordered]@{
+        Label   = 'Windows.old (previous Windows installation)'
+        Warning = 'Removes your ability to roll back to the previous Windows version. Windows normally auto-deletes this ~10 days after upgrading anyway.'
+        Paths   = @("$env:SystemDrive\Windows.old")
+        Mode    = 'Folder'
+    },
+    [ordered]@{
+        Label   = 'Windows component store aggressive cleanup (DISM /ResetBase)'
+        Warning = 'Permanently removes the ability to uninstall any currently-installed updates -- no rollback. Only run this if the system has been stable for a while. Requires admin.'
+        Paths   = @()
+        Mode    = 'Command'
+        Command = {
+            if (-not $isAdmin) { Write-Report "  Requires admin, skipping" 'WARN'; return }
+            Dism.exe /Online /Cleanup-Image /StartComponentCleanup /ResetBase /Quiet /NoRestart 2>&1 |
+                ForEach-Object { Write-Report "  dism: $_" }
+        }
+    },
+    [ordered]@{
+        Label   = 'Docker aggressive prune (all unused images + volumes)'
+        Warning = 'Removes ALL unused images (even tagged ones like postgres:16 you might reuse) AND unused volumes, which may hold database/app data you still need. Re-pull/re-create needed afterward.'
+        Paths   = @()
+        Mode    = 'Command'
+        Command = {
+            $docker = (Get-Command docker -ErrorAction SilentlyContinue)?.Source
+            if (-not $docker) { Write-Report "  docker CLI not found, skipping" 'WARN'; return }
+            & $docker system prune -a -f --volumes 2>&1 | ForEach-Object { Write-Report "  docker: $_" }
         }
     }
 )

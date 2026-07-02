@@ -21,11 +21,13 @@ A .NET 8 console app that orchestrates a weekly Windows maintenance routine:
 # Required
 $env:HF_API_KEY = 'hf_YOUR_TOKEN_HERE'
 
-# Optional — overrides the default model (openai/gpt-oss-120b)
+# Optional — overrides the preferred model (zai-org/GLM-5.2)
 # Must be a model ID available on Hugging Face's Inference Providers router:
 # https://huggingface.co/docs/inference-providers
-$env:HF_MODEL = 'openai/gpt-oss-120b'
+$env:HF_MODEL = 'zai-org/GLM-5.2'
 ```
+
+If the preferred model comes back `model_not_supported`, the app automatically retries the next model in `HuggingFaceClient.FallbackModels` (ordered by how many providers serve it) instead of failing — see [Troubleshooting](#troubleshooting) for the full list and how to check coverage for other models.
 
 These only last for the current session. To persist `HF_API_KEY` across sessions (for your user account), run:
 
@@ -49,10 +51,16 @@ The scan script supports these switches:
 | Switch | Effect |
 |---|---|
 | *(none)* | Scan only — reports reclaimable space, no files deleted |
-| `-Clean` | Deletes files in confirmed cleanup categories |
-| `-IncludeConditional` | Also evaluates riskier categories (old installers, WSL disk compact) |
+| `-Clean` | Deletes files / runs cleanup commands in confirmed categories |
+| `-IncludeConditional` | Also evaluates riskier categories (old installers, WSL disk compact, `Windows.old`, DISM `/ResetBase`, aggressive Docker prune) |
 | `-SkipDiskOptimize` | Skips the SSD TRIM/retrim step (used for unattended runs) |
 | `-NoReport` | Don't save a `.txt` report file |
+
+**Safe categories** (no opt-in needed): JetBrains/browser/Postman caches, npm/NuGet caches, old Azure Functions Core Tools versions, User Temp, WER archives, crash dumps, Docker unused data (`system prune` + `builder prune` — never touches volumes or in-use tagged images), Windows Update component store cleanup (`DISM /StartComponentCleanup`, conservative), Recycle Bin, Windows Update download cache, Explorer thumbnail/icon cache, pip cache, Yarn cache, VS Code cache.
+
+**Conditional categories** (`-IncludeConditional`): TechSmith old installers, WSL disk compact, `Windows.old` (removes upgrade rollback), DISM `/ResetBase` (removes ability to uninstall current updates), aggressive Docker prune (`-a --volumes`, can remove images/volumes you still need).
+
+Some categories (Docker, DISM, Windows Update cache) need Docker running / admin rights respectively — they skip themselves with a `WARN` line if the prerequisite isn't met, rather than failing the whole scan.
 
 ### 3. Reports directory
 
@@ -92,11 +100,22 @@ This is a DNS-level failure, not an HF API error — it means the app is trying 
 Your token likely lacks the "Inference Providers" permission. Generate a new fine-grained token at [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens) with that scope explicitly checked.
 
 **400 `model_not_supported`: "not supported by any provider you have enabled"**
-The model exists but none of the providers hosting it are enabled on your HF account. Check which providers actually serve a model with:
+The model exists but none of the providers hosting it are enabled/available on your HF account. The app already retries automatically through `HuggingFaceClient.FallbackModels`, ordered by provider coverage:
+
+| Model | Live providers (as checked) |
+|---|---|
+| `zai-org/GLM-5.2` (preferred) | Novita, Together, Fireworks, Featherless, DeepInfra, zai-org |
+| `openai/gpt-oss-120b` | Groq, Together, Cerebras, Novita, Fireworks, DeepInfra, Featherless, Scaleway, OVHcloud, Nscale |
+| `meta-llama/Llama-3.1-8B-Instruct` | Novita, Nscale, Featherless, Scaleway, DeepInfra |
+| `Qwen/Qwen2.5-Coder-32B-Instruct` | Nscale, Featherless, Scaleway |
+| `Qwen/Qwen3-Coder-480B-A35B-Instruct` | Novita, Featherless |
+| `Qwen/Qwen2.5-7B-Instruct-1M` | Featherless only |
+
+If all of them fail, check which providers actually serve any given model with:
 ```
 curl "https://huggingface.co/api/models/<org>/<model>?expand[]=inferenceProviderMapping"
 ```
-Models hosted by only one niche provider (e.g. `featherless-ai`) are the most likely to fail this way. Prefer models with broad coverage — `openai/gpt-oss-120b` (the default) is live on ~10 providers (Groq, Together, Cerebras, Novita, Fireworks, DeepInfra, etc.), so it's very likely at least one is enabled. You can also review/enable providers directly at [huggingface.co/settings/inference-providers](https://huggingface.co/settings/inference-providers).
+and review/enable providers at [huggingface.co/settings/inference-providers](https://huggingface.co/settings/inference-providers).
 
 **404 or "model not found" from the HF API**
 The model in `HF_MODEL` (or the default) isn't available on the Inference Providers router at all. Check [supported models](https://huggingface.co/docs/inference-providers) and switch to one that's listed.

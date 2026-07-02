@@ -19,3 +19,8 @@ public record HfChatResponse(
 );
 
 public record HfChoice(int index, HfMessage? message, string? finish_reason);
+
+// Error body shape returned by the router on 4xx responses
+public record HfErrorResponse(HfError? error);
+
+public record HfError(string? message, string? type, string? param, string? code);
