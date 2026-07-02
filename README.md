@@ -21,10 +21,10 @@ A .NET 8 console app that orchestrates a weekly Windows maintenance routine:
 # Required
 $env:HF_API_KEY = 'hf_YOUR_TOKEN_HERE'
 
-# Optional — overrides the default model (Qwen/Qwen2.5-7B-Instruct-1M)
+# Optional — overrides the default model (openai/gpt-oss-120b)
 # Must be a model ID available on Hugging Face's Inference Providers router:
 # https://huggingface.co/docs/inference-providers
-$env:HF_MODEL = 'Qwen/Qwen2.5-7B-Instruct-1M'
+$env:HF_MODEL = 'openai/gpt-oss-120b'
 ```
 
 These only last for the current session. To persist `HF_API_KEY` across sessions (for your user account), run:
@@ -91,5 +91,12 @@ This is a DNS-level failure, not an HF API error — it means the app is trying 
 **401/403 from the HF API**
 Your token likely lacks the "Inference Providers" permission. Generate a new fine-grained token at [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens) with that scope explicitly checked.
 
+**400 `model_not_supported`: "not supported by any provider you have enabled"**
+The model exists but none of the providers hosting it are enabled on your HF account. Check which providers actually serve a model with:
+```
+curl "https://huggingface.co/api/models/<org>/<model>?expand[]=inferenceProviderMapping"
+```
+Models hosted by only one niche provider (e.g. `featherless-ai`) are the most likely to fail this way. Prefer models with broad coverage — `openai/gpt-oss-120b` (the default) is live on ~10 providers (Groq, Together, Cerebras, Novita, Fireworks, DeepInfra, etc.), so it's very likely at least one is enabled. You can also review/enable providers directly at [huggingface.co/settings/inference-providers](https://huggingface.co/settings/inference-providers).
+
 **404 or "model not found" from the HF API**
-The model in `HF_MODEL` (or the default) isn't available on any Inference Providers router provider. Check [supported models](https://huggingface.co/docs/inference-providers) and switch to one that's listed, e.g. `Qwen/Qwen2.5-7B-Instruct-1M`, `google/gemma-2-2b-it`, or `openai/gpt-oss-120b`.
+The model in `HF_MODEL` (or the default) isn't available on the Inference Providers router at all. Check [supported models](https://huggingface.co/docs/inference-providers) and switch to one that's listed.

@@ -6,8 +6,11 @@ namespace MaintenanceAgent.Services;
 
 public class HuggingFaceClient
 {
-    // Free-tier model with good reasoning and long-context support
-    public const string DefaultModel = "Qwen/Qwen2.5-7B-Instruct-1M";
+    // Served by ~10 different Inference Providers (Groq, Together, Cerebras, Novita, Fireworks, etc.),
+    // so it's very likely at least one is enabled on any given HF account. Narrowly-hosted models
+    // (e.g. ones served by only "featherless-ai") tend to fail with model_not_supported unless that
+    // specific provider is enabled at huggingface.co/settings/inference-providers.
+    public const string DefaultModel = "openai/gpt-oss-120b";
 
     // HF's unified Inference Providers router — OpenAI-compatible chat completions endpoint.
     // The old per-model api-inference.huggingface.co/models/{model}/... URL was retired; the

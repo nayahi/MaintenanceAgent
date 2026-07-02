@@ -33,7 +33,7 @@ There is no test suite; there's nothing to run for `test`/`lint` beyond `dotnet 
 ## Configuration (environment variables)
 
 - `HF_API_KEY` — **required**. Hugging Face API token (Bearer auth). The app exits with an error if unset.
-- `HF_MODEL` — optional. Overrides the default model (`HuggingFaceClient.DefaultModel`, currently `Qwen/Qwen2.5-7B-Instruct-1M`). Must be a model ID supported by Hugging Face's [Inference Providers router](https://huggingface.co/docs/inference-providers) (optionally suffixed `:provider`, e.g. `:fastest`).
+- `HF_MODEL` — optional. Overrides the default model (`HuggingFaceClient.DefaultModel`, currently `openai/gpt-oss-120b`). Must be a model ID supported by Hugging Face's [Inference Providers router](https://huggingface.co/docs/inference-providers) (optionally suffixed `:provider`, e.g. `:fastest`) — check `https://huggingface.co/api/models/{model}?expand[]=inferenceProviderMapping` for which providers actually serve a given model before switching.
 
 ## Architecture
 
