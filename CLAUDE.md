@@ -33,7 +33,7 @@ There is no test suite; there's nothing to run for `test`/`lint` beyond `dotnet 
 ## Configuration (environment variables)
 
 - `HF_API_KEY` — **required**. Hugging Face API token (Bearer auth). The app exits with an error if unset.
-- `HF_MODEL` — optional. Overrides the default model (`HuggingFaceClient.DefaultModel`, currently `Qwen/Qwen2.5-7B-Instruct`).
+- `HF_MODEL` — optional. Overrides the default model (`HuggingFaceClient.DefaultModel`, currently `Qwen/Qwen2.5-7B-Instruct-1M`). Must be a model ID supported by Hugging Face's [Inference Providers router](https://huggingface.co/docs/inference-providers) (optionally suffixed `:provider`, e.g. `:fastest`).
 
 ## Architecture
 
@@ -41,7 +41,7 @@ The whole app is a linear, three-stage pipeline driven from `Program.cs` (top-le
 
 1. **`Services/PowerShellRunner.cs`** — shells out to `pwsh.exe` (falls back to PATH-resolved `pwsh` if the hardcoded `D:\Program Files\PowerShell\7\pwsh.exe` doesn't exist) and runs `Invoke-MaintenanceScan.ps1`. Captures stdout/stderr, and parses a `REPORT_FILE:<path>` sentinel line the PS7 script emits to locate its own saved `.txt` report. Returns a `Models/ScanResult.cs`.
    - `--clean` on the C# app maps to `-Clean -SkipDiskOptimize` on the PS7 script (unattended clean, no interactive TRIM/disk-optimize step).
-2. **`Services/HuggingFaceClient.cs`** — posts the scan's raw text (truncated to ~6000 chars to fit free-tier context limits) to HF's OpenAI-compatible `/models/{model}/v1/chat/completions` endpoint, using a fixed system prompt asking for the "top 3 maintenance actions." Request/response shapes are OpenAI-style records in `Models/HuggingFaceModels.cs` (`HfChatRequest`/`HfChatResponse`/etc.).
+2. **`Services/HuggingFaceClient.cs`** — posts the scan's raw text (truncated to ~6000 chars to fit free-tier context limits) to HF's unified [Inference Providers](https://huggingface.co/docs/inference-providers) router at `https://router.huggingface.co/v1/chat/completions` (OpenAI-compatible; the model is specified in the request body, not the URL path — the old per-model `api-inference.huggingface.co/models/{model}/...` endpoint was retired), using a fixed system prompt asking for the "top 3 maintenance actions." Request/response shapes are OpenAI-style records in `Models/HuggingFaceModels.cs` (`HfChatRequest`/`HfChatResponse`/etc.).
 3. **`Services/ReportWriter.cs`** — combines the raw scan output and the AI advice into one timestamped Markdown file (`WeeklyAIReport_<timestamp>.md`) under the reports directory.
 
 Both the PS7 script's own `.txt` report and the C# app's combined `.md` report land in the same directory: `C:\Users\nayah\MaintenanceReports\`.

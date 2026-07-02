@@ -7,10 +7,12 @@ namespace MaintenanceAgent.Services;
 public class HuggingFaceClient
 {
     // Free-tier model with good reasoning and long-context support
-    public const string DefaultModel = "Qwen/Qwen2.5-7B-Instruct";
+    public const string DefaultModel = "Qwen/Qwen2.5-7B-Instruct-1M";
 
-    // HF uses an OpenAI-compatible chat completions endpoint
-    private const string BaseUrl = "https://api-inference.huggingface.co/models/{0}/v1/chat/completions";
+    // HF's unified Inference Providers router — OpenAI-compatible chat completions endpoint.
+    // The old per-model api-inference.huggingface.co/models/{model}/... URL was retired; the
+    // model is now specified in the request body instead of the URL path.
+    private const string BaseUrl = "https://router.huggingface.co/v1/chat/completions";
 
     private readonly HttpClient _http;
     private readonly string     _model;
@@ -54,8 +56,7 @@ public class HuggingFaceClient
             temperature: 0.3f
         );
 
-        var url = string.Format(BaseUrl, Uri.EscapeDataString(_model));
-        using var response = await _http.PostAsJsonAsync(url, request, ct);
+        using var response = await _http.PostAsJsonAsync(BaseUrl, request, ct);
 
         if (!response.IsSuccessStatusCode)
         {

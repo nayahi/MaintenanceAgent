@@ -10,7 +10,7 @@ A .NET 8 console app that orchestrates a weekly Windows maintenance routine:
 
 - [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0)
 - [PowerShell 7](https://github.com/PowerShell/PowerShell/releases) (`pwsh.exe`)
-- A free [Hugging Face](https://huggingface.co/settings/tokens) API token
+- A [Hugging Face](https://huggingface.co/settings/tokens) API token with **"Inference Providers"** permission (generate a fine-grained token and check that scope — older read-only tokens may not have it)
 - The companion PowerShell script `Invoke-MaintenanceScan.ps1` (see [PowerShell script setup](#powershell-script-setup) below)
 
 ## Setup
@@ -21,8 +21,10 @@ A .NET 8 console app that orchestrates a weekly Windows maintenance routine:
 # Required
 $env:HF_API_KEY = 'hf_YOUR_TOKEN_HERE'
 
-# Optional — overrides the default model (Qwen/Qwen2.5-7B-Instruct)
-$env:HF_MODEL = 'Qwen/Qwen2.5-7B-Instruct'
+# Optional — overrides the default model (Qwen/Qwen2.5-7B-Instruct-1M)
+# Must be a model ID available on Hugging Face's Inference Providers router:
+# https://huggingface.co/docs/inference-providers
+$env:HF_MODEL = 'Qwen/Qwen2.5-7B-Instruct-1M'
 ```
 
 These only last for the current session. To persist `HF_API_KEY` across sessions (for your user account), run:
@@ -80,3 +82,14 @@ dotnet run --project MaintenanceAgent -- --clean
 ```
 
 Output includes the raw scan results, AI-generated recommendations, and the path to the saved Markdown report.
+
+## Troubleshooting
+
+**`Hugging Face API error: The requested name is valid, but no data of the requested type was found.`**
+This is a DNS-level failure, not an HF API error — it means the app is trying to reach a hostname that no longer resolves. Make sure you're on a build that posts to `https://router.huggingface.co/v1/chat/completions` (HF retired the old per-model `api-inference.huggingface.co/models/{model}/...` endpoint).
+
+**401/403 from the HF API**
+Your token likely lacks the "Inference Providers" permission. Generate a new fine-grained token at [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens) with that scope explicitly checked.
+
+**404 or "model not found" from the HF API**
+The model in `HF_MODEL` (or the default) isn't available on any Inference Providers router provider. Check [supported models](https://huggingface.co/docs/inference-providers) and switch to one that's listed, e.g. `Qwen/Qwen2.5-7B-Instruct-1M`, `google/gemma-2-2b-it`, or `openai/gpt-oss-120b`.
