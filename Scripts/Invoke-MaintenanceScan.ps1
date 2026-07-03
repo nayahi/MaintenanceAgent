@@ -33,9 +33,13 @@
 .EXAMPLE
     # Scheduled/unattended clean (no GUI prompts)
     pwsh -File "C:\Users\nayah\Scripts\Invoke-MaintenanceScan.ps1" -Clean -SkipDiskOptimize
+
+.EXAMPLE
+    # Dry run: preview exactly what -Clean would do (per category) without deleting/running anything
+    pwsh -File "C:\Users\nayah\Scripts\Invoke-MaintenanceScan.ps1" -Clean -WhatIf
 #>
 
-[CmdletBinding()]
+[CmdletBinding(SupportsShouldProcess)]
 param(
     [switch]$Clean,
     [switch]$IncludeConditional,
@@ -429,6 +433,11 @@ if ($Clean) {
             Write-Host "`n  WARNING: $($cat.Warning)" -ForegroundColor Yellow
         }
 
+        # -WhatIf (requires -Clean too) previews every category -- Folder deletions and
+        # Command invocations alike -- without touching anything, including external
+        # tools (docker/dism/etc.) that don't understand PowerShell's own -WhatIf.
+        if (-not $PSCmdlet.ShouldProcess($cat.Label, 'Clean')) { continue }
+
         Write-Report "  CLEANING: $($cat.Label)  (~$mb MB)" 'INFO'
         $freed = 0L
         switch ($cat.Mode) {
@@ -452,7 +461,7 @@ if ($Clean) {
     }
 
     # ── Disk optimization (SSD TRIM) ──────────────────────────────────────────
-    if (-not $SkipDiskOptimize) {
+    if (-not $SkipDiskOptimize -and $PSCmdlet.ShouldProcess('C: Volume', 'Optimize-Volume (TRIM/retrim)')) {
         Write-Report "── DISK OPTIMIZATION ──" 'SECTION'
         Write-Report "Running Optimize-Volume (TRIM/retrim on SSD)..." 'INFO'
         try {

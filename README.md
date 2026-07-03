@@ -56,6 +56,13 @@ The scan script supports these switches:
 | `-IncludeConditional` | Also evaluates riskier categories (old installers, WSL disk compact, `Windows.old`, DISM `/ResetBase`, aggressive Docker prune) |
 | `-SkipDiskOptimize` | Skips the SSD TRIM/retrim step (used for unattended runs) |
 | `-NoReport` | Don't save a `.txt` report file |
+| `-WhatIf` (with `-Clean`) | Dry run — prints what each category would do without deleting/running anything, including external tools like `docker`/`Dism.exe` |
+
+**Testing `-Clean` safely**: run `-Clean -WhatIf` first (or via `dotnet run --project MaintenanceAgent -- --clean` isn't wired to pass `-WhatIf` through — test the PS7 script directly for a dry run, e.g. `pwsh -File "C:\Users\nayah\Scripts\Invoke-MaintenanceScan.ps1" -Clean -WhatIf`). It's a real `ShouldProcess` gate around every category (not just PowerShell's native cmdlets), so nothing is touched.
+
+**Testing `--clean` from Visual Studio**: set the command-line argument via Project Properties → Debug → "Command line arguments" = `--clean`, or add `"commandLineArgs": "--clean"` to the relevant profile in `MaintenanceAgent/Properties/launchSettings.json`. Note the C# app's `--clean` flag maps straight to `-Clean -SkipDiskOptimize` with no `-WhatIf` passthrough today, so this really deletes — use the PS7 script directly with `-WhatIf` first if you want a dry run before doing that.
+
+**Admin-gated categories** (DISM, Windows Update cache) need the *whole process* elevated, not just the script — a non-elevated app can't silently elevate a child process without breaking the stdout capture this app relies on. To test them: either run Visual Studio itself as Administrator (right-click its icon → "Run as administrator" → reopen the solution → F5, so the debuggee and the `pwsh.exe` child it spawns both inherit the elevated token), or run `dotnet run --project MaintenanceAgent -- --clean` from an Administrator terminal. There's no need to make the app always require elevation (that would prompt UAC even for plain scans) — elevate only when you specifically want to test those categories.
 
 **Safe categories** (no opt-in needed): JetBrains/browser/Postman caches, npm/NuGet caches, old Azure Functions Core Tools versions, User Temp, WER archives, crash dumps, Docker unused data (`system prune` + `builder prune` — never touches volumes or in-use tagged images), Windows Update component store cleanup (`DISM /StartComponentCleanup`, conservative), Recycle Bin, Windows Update download cache, Explorer thumbnail/icon cache, pip cache, Yarn cache, VS Code cache.
 
