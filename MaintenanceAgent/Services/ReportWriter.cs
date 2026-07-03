@@ -10,10 +10,24 @@ public class ReportWriter
         Directory.CreateDirectory(_reportDir);
     }
 
-    public string WriteWeeklyReport(string scanOutput, string aiAdvice, string model)
+    public string WriteWeeklyReport(string scanOutput, string aiAdvice, string model, string? historicalInsights = null)
     {
         var timestamp  = DateTime.Now.ToString("yyyyMMdd_HHmmss");
         var reportPath = Path.Combine(_reportDir, $"WeeklyAIReport_{timestamp}.md");
+
+        var insightsSection = string.IsNullOrWhiteSpace(historicalInsights)
+            ? ""
+            : $"""
+
+              ---
+
+              ## Historical Insights (fed to the AI for this run)
+
+              ```
+              {historicalInsights}
+              ```
+
+              """;
 
         var content = $"""
             # Weekly Maintenance Report
@@ -25,7 +39,7 @@ public class ReportWriter
             ## AI Recommendations
 
             {aiAdvice}
-
+            {insightsSection}
             ---
 
             ## Raw Scan Output

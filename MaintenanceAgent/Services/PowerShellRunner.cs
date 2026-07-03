@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text.Json;
 using MaintenanceAgent.Models;
 
 namespace MaintenanceAgent.Services;
@@ -45,22 +46,39 @@ public class PowerShellRunner
         await process.WaitForExitAsync(ct);
 
         var rawOutput  = stdout.ToString();
-        var reportFile = ParseReportFilePath(rawOutput);
+        var reportFile = ParseSentinel(rawOutput, "REPORT_FILE:");
 
         return new ScanResult
         {
             RawOutput       = rawOutput,
             ReportFilePath  = reportFile ?? string.Empty,
             ScriptSucceeded = process.ExitCode == 0,
-            ErrorMessage    = stderr.Length > 0 ? stderr.ToString() : null
+            ErrorMessage    = stderr.Length > 0 ? stderr.ToString() : null,
+            Summary         = ParseRunSummary(rawOutput)
         };
     }
 
-    // Parses the sentinel line emitted by the PS7 script: "REPORT_FILE:C:\..."
-    private static string? ParseReportFilePath(string output)
+    // Parses a "PREFIX:<rest of line>" sentinel line emitted by the PS7 script
+    private static string? ParseSentinel(string output, string prefix)
     {
         var line = output.Split('\n')
-                         .FirstOrDefault(l => l.TrimStart().StartsWith("REPORT_FILE:"));
-        return line?.Substring(line.IndexOf(':') + 1).Trim();
+                         .FirstOrDefault(l => l.TrimStart().StartsWith(prefix));
+        return line?[(line.IndexOf(prefix, StringComparison.Ordinal) + prefix.Length)..].Trim();
+    }
+
+    // Parses the sentinel line emitted by the PS7 script: "RUN_SUMMARY_JSON:{...}"
+    private static RunSummary? ParseRunSummary(string output)
+    {
+        var json = ParseSentinel(output, "RUN_SUMMARY_JSON:");
+        if (string.IsNullOrWhiteSpace(json)) return null;
+
+        try
+        {
+            return JsonSerializer.Deserialize<RunSummary>(json);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
     }
 }

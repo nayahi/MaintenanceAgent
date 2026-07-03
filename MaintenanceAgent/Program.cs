@@ -1,3 +1,4 @@
+using MaintenanceAgent.Models;
 using MaintenanceAgent.Services;
 
 // ── Configuration from environment variables ─────────────────────────────────
@@ -42,10 +43,17 @@ try
         return 3;
     }
 
-    // 2. Send scan output to Hugging Face for AI analysis ─────────────────────
+    // 2. Load run history and build insights from past recommendations vs results ─
+    var historyStore  = new HistoryStore(ReportDir);
+    var recentHistory = historyStore.LoadRecent(10);
+    var insights      = InsightsBuilder.BuildSummary(recentHistory);
+    if (insights != null)
+        Log($"Loaded {recentHistory.Count} past run(s) from history.jsonl to inform this run's recommendations.");
+
+    // 3. Send scan output (+ historical insights) to Hugging Face for AI analysis ─
     Log($"Sending scan to Hugging Face (preferred model: {model})...");
     var hfClient = HuggingFaceClient.Create(apiKey, model);
-    var advice   = await hfClient.GetMaintenanceAdviceAsync(scan.RawOutput, cts.Token);
+    var advice   = await hfClient.GetMaintenanceAdviceAsync(scan.RawOutput, insights, cts.Token);
     var usedModel = hfClient.LastUsedModel ?? model;
     if (usedModel != model)
         Log($"Preferred model unavailable; fell back to: {usedModel}");
@@ -55,9 +63,23 @@ try
     Console.WriteLine(advice);
     Console.WriteLine("════════════════════════════════════════════════════════════════");
 
-    // 3. Save combined Markdown report ────────────────────────────────────────
+    // 4. Record this run to history so future runs can learn from it ────────────
+    if (scan.Summary is { } summary)
+    {
+        historyStore.AppendRun(new RunRecord(
+            summary.Timestamp, summary.CleanMode, usedModel,
+            summary.DriveFreeGBBefore, summary.DriveFreeGBAfter, summary.TotalReclaimableMB,
+            summary.Categories, advice));
+        Log("Run recorded to history.jsonl.");
+    }
+    else
+    {
+        Log("WARNING: scan script did not emit a RUN_SUMMARY_JSON line (older script version?) -- this run was not recorded to history.");
+    }
+
+    // 5. Save combined Markdown report ────────────────────────────────────────
     var writer     = new ReportWriter(ReportDir);
-    var reportPath = writer.WriteWeeklyReport(scan.RawOutput, advice, usedModel);
+    var reportPath = writer.WriteWeeklyReport(scan.RawOutput, advice, usedModel, insights);
     Log($"Report saved: {reportPath}");
 
     return 0;

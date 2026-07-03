@@ -50,9 +50,10 @@ public class HuggingFaceClient
         return new HuggingFaceClient(http, model);
     }
 
-    public async Task<string> GetMaintenanceAdviceAsync(string scanOutput, CancellationToken ct = default)
+    public async Task<string> GetMaintenanceAdviceAsync(
+        string scanOutput, string? historicalInsights = null, CancellationToken ct = default)
     {
-        var messages = BuildMessages(scanOutput);
+        var messages = BuildMessages(scanOutput, historicalInsights);
 
         ModelNotSupportedException? lastNotSupported = null;
         foreach (var model in CandidateModels())
@@ -87,22 +88,34 @@ public class HuggingFaceClient
         }
     }
 
-    private static List<HfMessage> BuildMessages(string scanOutput)
+    private static List<HfMessage> BuildMessages(string scanOutput, string? historicalInsights)
     {
         // Truncate to ~6000 chars to stay within free-tier context limits
         var truncated = scanOutput.Length > 6000
             ? scanOutput[..6000] + "\n[...truncated for context limit...]"
             : scanOutput;
 
+        var userContent =
+            $"Based on this Windows system scan, what are the top 3 maintenance actions " +
+            $"I should take this week and why? Be specific.\n\nSCAN OUTPUT:\n{truncated}";
+
+        if (!string.IsNullOrWhiteSpace(historicalInsights))
+        {
+            userContent +=
+                $"\n\n{historicalInsights}\n\n" +
+                "Use this historical data to prioritize categories that have reliably freed significant " +
+                "space in past runs, and call out any category you keep seeing recommended that's never " +
+                "actually been cleaned.";
+        }
+
         return
         [
             new HfMessage("system",
                 "You are a Windows system administrator assistant. " +
                 "Analyze system maintenance scan output and give concise, actionable advice. " +
-                "Be specific with folder names and sizes. Prioritize by impact on disk space and performance."),
-            new HfMessage("user",
-                $"Based on this Windows system scan, what are the top 3 maintenance actions " +
-                $"I should take this week and why? Be specific.\n\nSCAN OUTPUT:\n{truncated}")
+                "Be specific with folder names and sizes. Prioritize by impact on disk space and performance. " +
+                "When historical data from past runs is provided, weigh it into your prioritization."),
+            new HfMessage("user", userContent)
         ];
     }
 

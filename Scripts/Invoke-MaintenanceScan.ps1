@@ -448,6 +448,7 @@ if ($Clean) {
                 Write-Report "  CLEANED: $($cat.Label)  →  $(Format-MB $freed) MB freed" 'OK'
             }
         }
+        $cat['FreedBytes'] = $freed
     }
 
     # ── Disk optimization (SSD TRIM) ──────────────────────────────────────────
@@ -475,6 +476,33 @@ if ($Clean) {
 } else {
     Write-Report "Scan complete. Re-run with -Clean to delete. Estimated savings: $totalGB GB" 'OK'
 }
+
+# ── Structured run summary (for the C# agent's history/insights tracking) ────
+function Get-CategorySummary {
+    param($Categories, [string]$Type)
+    $Categories | ForEach-Object {
+        [ordered]@{
+            Label     = $_.Label
+            Type      = $Type
+            ScannedMB = Format-MB ($_['ScannedBytes'] ?? 0L)
+            FreedMB   = if ($_.Contains('FreedBytes')) { Format-MB $_['FreedBytes'] } else { $null }
+        }
+    }
+}
+
+$categorySummary = @(Get-CategorySummary $SafeCategories 'Safe')
+if ($IncludeConditional) { $categorySummary += @(Get-CategorySummary $ConditionalCategories 'Conditional') }
+
+$runSummary = [ordered]@{
+    Timestamp          = (Get-Date -Format 'o')
+    CleanMode          = [bool]$Clean
+    DriveFreeGBBefore  = $before.FreeGB
+    DriveFreeGBAfter   = $after.FreeGB
+    TotalReclaimableMB = $totalMB
+    Categories         = $categorySummary
+}
+# Sentinel line for C# agent to parse (single-line compact JSON)
+Write-Output "RUN_SUMMARY_JSON:$($runSummary | ConvertTo-Json -Compress -Depth 5)"
 
 # ── Save report ───────────────────────────────────────────────────────────────
 if (-not $NoReport) {

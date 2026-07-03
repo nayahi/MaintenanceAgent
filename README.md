@@ -3,8 +3,9 @@
 A .NET 8 console app that orchestrates a weekly Windows maintenance routine:
 
 1. Runs a PowerShell 7 disk-cleanup scan script.
-2. Sends the scan output to a Hugging Face model for AI-generated maintenance advice.
-3. Saves a combined Markdown report.
+2. Sends the scan output — plus a summary of what's worked in past runs — to a Hugging Face model for AI-generated maintenance advice.
+3. Records this run's results to a local history file so future runs can compare recommendations against actual outcomes.
+4. Saves a combined Markdown report.
 
 ## Prerequisites
 
@@ -64,7 +65,13 @@ Some categories (Docker, DISM, Windows Update cache) need Docker running / admin
 
 ### 3. Reports directory
 
-Both the PowerShell script's own report and the app's combined Markdown report are saved to `C:\Users\nayah\MaintenanceReports\`. Update the `ReportDir` const in `Program.cs` if you want a different location.
+The PowerShell script's own report, the app's combined Markdown report, and `history.jsonl` (see below) are all saved to `C:\Users\nayah\MaintenanceReports\`. Update the `ReportDir` const in `Program.cs` if you want a different location.
+
+### Recommendation history and insights
+
+Every run appends one line to `history.jsonl` in the reports directory: timestamp, whether it was a clean run, the model used, drive free space before/after, and — per category — how much was scanned vs. actually freed (freed is only populated on `-Clean` runs). Before asking the AI for advice, the app loads the last 10 runs and builds a compact summary (drive-space trend, and per category: average MB freed across actual cleans, and how often the AI recommended it) — that summary is appended to the prompt sent to the model, and also shown in the saved `.md` report under "Historical Insights" so you can see exactly what the AI was told.
+
+This means categories that reliably free real space get reinforced over time, and categories the AI keeps suggesting that never actually get cleaned get called out. There's no separate config for this — it's automatic once `history.jsonl` has at least one prior run. Delete `history.jsonl` (or move it aside) to reset the learning.
 
 ### 4. (Optional) Schedule a weekly run
 
