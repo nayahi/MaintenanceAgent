@@ -375,6 +375,28 @@ if (Test-Path $azTagsRoot) {
     }
 }
 
+# ── Resolve real DISM component-store analysis (replaces the static placeholder note) ─
+# DISM doesn't report a clean reclaimable-MB figure (WinSxS hard links make folder size
+# unreliable), so we surface its own package-count/recommendation instead of a size.
+function Get-ComponentStoreAnalysis {
+    if (-not $isAdmin) { return $null }
+    try {
+        $output      = Dism.exe /Online /Cleanup-Image /AnalyzeComponentStore 2>&1
+        $reclaimable = ($output | Select-String 'Number of Reclaimable Packages\s*:\s*(\d+)').Matches.Groups[1].Value
+        $recommended = ($output | Select-String 'Component Store Cleanup Recommended\s*:\s*(\w+)').Matches.Groups[1].Value
+        if ($reclaimable -and $recommended) {
+            return "DISM /StartComponentCleanup -- conservative, keeps rollback ability for recent updates. " +
+                   "Live analysis: $reclaimable reclaimable package(s), cleanup recommended: $recommended. " +
+                   "(DISM doesn't report an exact MB figure -- these are packages superseding what's kept for update rollback.)"
+        }
+    } catch { <# fall back to the static note below #> }
+    return $null
+}
+
+$dismCat = $SafeCategories | Where-Object { $_.Label -eq 'Windows Update component store (WinSxS superseded versions)' }
+$dismLiveNote = Get-ComponentStoreAnalysis
+if ($dismLiveNote) { $dismCat.Note = $dismLiveNote }
+
 # ══════════════════════════════════════════════════════════════════════════════
 # SCAN PHASE
 # ══════════════════════════════════════════════════════════════════════════════
