@@ -51,9 +51,13 @@ try
         Log($"Loaded {recentHistory.Count} past run(s) from history.jsonl to inform this run's recommendations.");
 
     // 3. Send scan output (+ historical insights) to Hugging Face for AI analysis ─
+    //    Tools let the model pull deeper read-only history data mid-conversation if it wants more
+    //    than the fixed insights summary already gives it.
     Log($"Sending scan to Hugging Face (preferred model: {model})...");
-    var hfClient = HuggingFaceClient.Create(apiKey, model);
-    var advice   = await hfClient.GetMaintenanceAdviceAsync(scan.RawOutput, insights, cts.Token);
+    var hfClient   = HuggingFaceClient.Create(apiKey, model);
+    var tools      = new MaintenanceTools(historyStore);
+    var advice     = await hfClient.GetMaintenanceAdviceAsync(
+        scan.RawOutput, insights, toolExecutor: tools.Execute, ct: cts.Token);
     var usedModel = hfClient.LastUsedModel ?? model;
     if (usedModel != model)
         Log($"Preferred model unavailable; fell back to: {usedModel}");

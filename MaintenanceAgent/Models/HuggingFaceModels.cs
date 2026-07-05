@@ -6,10 +6,19 @@ public record HfChatRequest(
     List<HfMessage> messages,
     int max_tokens = 800,
     float temperature = 0.3f,
-    bool stream = false
+    bool stream = false,
+    List<HfTool>? tools = null
 );
 
-public record HfMessage(string role, string content);
+// content is null on assistant messages that only carry tool_calls, and on tool-result
+// messages content holds the tool's JSON output with tool_call_id identifying which call it answers.
+public record HfMessage(string role, string? content = null, List<HfToolCall>? tool_calls = null, string? tool_call_id = null);
+
+public record HfTool(string type, HfFunctionDef function);
+public record HfFunctionDef(string name, string description, object parameters);
+
+public record HfToolCall(string id, string type, HfFunctionCall function);
+public record HfFunctionCall(string name, string arguments);
 
 // OpenAI-compatible response from HF API
 public record HfChatResponse(

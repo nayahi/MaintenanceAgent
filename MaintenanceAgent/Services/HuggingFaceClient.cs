@@ -1,11 +1,18 @@
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using MaintenanceAgent.Models;
 
 namespace MaintenanceAgent.Services;
 
 public class HuggingFaceClient
 {
+    // Omits null fields (tools, tool_calls, tool_call_id) entirely rather than sending them as
+    // JSON null, so a plain non-tool-calling request's wire shape is unchanged from before tools existed.
+    private static readonly JsonSerializerOptions RequestJsonOptions =
+        new() { DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull };
+
     // Confirmed live on 6 Inference Providers (Novita, Together, Fireworks, Featherless, DeepInfra, zai-org).
     public const string DefaultModel = "zai-org/GLM-5.2";
 
@@ -22,6 +29,10 @@ public class HuggingFaceClient
         "Qwen/Qwen3-Coder-480B-A35B-Instruct",      // 2 providers
         "Qwen/Qwen2.5-7B-Instruct-1M",              // 1 provider (featherless-ai)
     ];
+
+    // Bounds how many tool round-trips a single model gets before we give up on it for
+    // this run -- not every provider behind the router supports tool calling equally well.
+    private const int MaxToolRoundTrips = 4;
 
     // HF's unified Inference Providers router — OpenAI-compatible chat completions endpoint.
     // The old per-model api-inference.huggingface.co/models/{model}/... URL was retired; the
@@ -50,17 +61,22 @@ public class HuggingFaceClient
         return new HuggingFaceClient(http, model);
     }
 
+    // toolExecutor, if given, lets the model request deeper read-only analysis mid-conversation
+    // (see Services/MaintenanceTools.cs) -- takes (toolName, argumentsJson) and returns a JSON result.
     public async Task<string> GetMaintenanceAdviceAsync(
-        string scanOutput, string? historicalInsights = null, CancellationToken ct = default)
+        string scanOutput,
+        string? historicalInsights = null,
+        Func<string, string, string>? toolExecutor = null,
+        CancellationToken ct = default)
     {
-        var messages = BuildMessages(scanOutput, historicalInsights);
+        var messages = BuildMessages(scanOutput, historicalInsights, toolExecutor != null);
 
         ModelNotSupportedException? lastNotSupported = null;
         foreach (var model in CandidateModels())
         {
             try
             {
-                var advice = await RequestChatCompletionAsync(model, messages, ct);
+                var advice = await RunConversationAsync(model, messages, toolExecutor, ct);
                 LastUsedModel = model;
                 return advice;
             }
@@ -88,7 +104,7 @@ public class HuggingFaceClient
         }
     }
 
-    private static List<HfMessage> BuildMessages(string scanOutput, string? historicalInsights)
+    private static List<HfMessage> BuildMessages(string scanOutput, string? historicalInsights, bool toolsAvailable)
     {
         // Truncate to ~6000 chars to stay within free-tier context limits
         var truncated = scanOutput.Length > 6000
@@ -108,21 +124,57 @@ public class HuggingFaceClient
                 "actually been cleaned.";
         }
 
+        var systemPrompt =
+            "You are a Windows system administrator assistant. " +
+            "Analyze system maintenance scan output and give concise, actionable advice. " +
+            "Be specific with folder names and sizes. Prioritize by impact on disk space and performance. " +
+            "When historical data from past runs is provided, weigh it into your prioritization.";
+
+        if (toolsAvailable)
+        {
+            systemPrompt +=
+                " You have optional read-only tools available for deeper analysis (full history for a " +
+                "specific category, or a disk-space trend forecast) -- use them if the summary given isn't " +
+                "enough to make a confident recommendation, then give your final answer as plain text.";
+        }
+
         return
         [
-            new HfMessage("system",
-                "You are a Windows system administrator assistant. " +
-                "Analyze system maintenance scan output and give concise, actionable advice. " +
-                "Be specific with folder names and sizes. Prioritize by impact on disk space and performance. " +
-                "When historical data from past runs is provided, weigh it into your prioritization."),
+            new HfMessage("system", systemPrompt),
             new HfMessage("user", userContent)
         ];
     }
 
-    private async Task<string> RequestChatCompletionAsync(string model, List<HfMessage> messages, CancellationToken ct)
+    private async Task<string> RunConversationAsync(
+        string model, List<HfMessage> messages, Func<string, string, string>? toolExecutor, CancellationToken ct)
     {
-        var request = new HfChatRequest(model, messages, max_tokens: 800, temperature: 0.3f);
-        using var response = await _http.PostAsJsonAsync(BaseUrl, request, ct);
+        // Copy so a fallback retry with the next candidate model starts from the same clean state
+        var conversation = new List<HfMessage>(messages);
+        var tools = toolExecutor != null ? MaintenanceTools.Definitions : null;
+
+        for (var round = 0; round < MaxToolRoundTrips; round++)
+        {
+            var message = await SendOnceAsync(model, conversation, tools, ct);
+
+            if (toolExecutor == null || message.tool_calls is not { Count: > 0 } toolCalls)
+                return message.content ?? "No response received from the model.";
+
+            conversation.Add(message);
+            foreach (var call in toolCalls)
+            {
+                var result = toolExecutor(call.function.name, call.function.arguments);
+                conversation.Add(new HfMessage("tool", result, tool_call_id: call.id));
+            }
+        }
+
+        return "The AI kept requesting tool calls without giving a final recommendation -- try again.";
+    }
+
+    private async Task<HfMessage> SendOnceAsync(
+        string model, List<HfMessage> messages, IReadOnlyList<HfTool>? tools, CancellationToken ct)
+    {
+        var request = new HfChatRequest(model, messages, max_tokens: 800, temperature: 0.3f, tools: tools?.ToList());
+        using var response = await _http.PostAsJsonAsync(BaseUrl, request, RequestJsonOptions, ct);
 
         if (!response.IsSuccessStatusCode)
         {
@@ -140,17 +192,17 @@ public class HuggingFaceClient
         }
 
         var result = await response.Content.ReadFromJsonAsync<HfChatResponse>(cancellationToken: ct);
-        return result?.choices?.FirstOrDefault()?.message?.content
-               ?? "No response received from the model.";
+        return result?.choices?.FirstOrDefault()?.message
+               ?? new HfMessage("assistant", "No response received from the model.");
     }
 
     private static HfError? TryParseError(string body)
     {
         try
         {
-            return System.Text.Json.JsonSerializer.Deserialize<HfErrorResponse>(body)?.error;
+            return JsonSerializer.Deserialize<HfErrorResponse>(body)?.error;
         }
-        catch (System.Text.Json.JsonException)
+        catch (JsonException)
         {
             return null;
         }

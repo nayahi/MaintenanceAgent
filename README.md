@@ -66,6 +66,8 @@ The scan script supports these switches:
 
 **Verified (2026-07-03, elevated session)**: `$isAdmin`'s check (`IsInRole(Administrator)`) correctly returns `true` under an elevated process, and `Dism.exe` itself is functional in that context — a read-only `Dism.exe /Online /Cleanup-Image /AnalyzeComponentStore` run reported real data (2 reclaimable packages, "Component Store Cleanup Recommended: Yes"). One gotcha found along the way: testing the admin check with `-Clean -WhatIf` isn't conclusive by itself — `ShouldProcess` short-circuits *before* a category's `Command` scriptblock (and its internal `$isAdmin` check) ever runs, so that only proves the outer loop reaches the category, not that the elevation check inside it passes. Confirm elevation directly (or drop `-WhatIf` for a real run) if you need to verify that specifically.
 
+**Real `/ResetBase` run (2026-07-04)**: also ran the actual (non-`-WhatIf`) `Dism.exe /Online /Cleanup-Image /StartComponentCleanup /ResetBase` on this machine. Result: succeeded (exit code 0), but reclaimed **~0 bytes** — component store size and reclaimable-package count were identical before and after, since the conservative cleanup had already run twice in the prior two days and there was nothing left in the update-rollback bucket to remove. Lesson: the "Actual Size of Component Store" figure from `AnalyzeComponentStore` (12.42 GB here) is *not* the reclaimable amount — most of it (`Shared with Windows`) is active system files, never reclaimable. Don't run `/ResetBase` expecting anywhere near that number; check "Number of Reclaimable Packages" for a more honest signal, and even that doesn't map to a specific MB figure.
+
 **Safe categories** (no opt-in needed): JetBrains/browser/Postman caches, npm/NuGet caches, old Azure Functions Core Tools versions, User Temp, WER archives, crash dumps, Docker unused data (`system prune` + `builder prune` — never touches volumes or in-use tagged images), Windows Update component store cleanup (`DISM /StartComponentCleanup`, conservative), Recycle Bin, Windows Update download cache, Explorer thumbnail/icon cache, pip cache, Yarn cache, VS Code cache.
 
 **Conditional categories** (`-IncludeConditional`): TechSmith old installers, WSL disk compact, `Windows.old` (removes upgrade rollback), DISM `/ResetBase` (removes ability to uninstall current updates), aggressive Docker prune (`-a --volumes`, can remove images/volumes you still need).
@@ -81,6 +83,17 @@ The PowerShell script's own report, the app's combined Markdown report, and `his
 Every run appends one line to `history.jsonl` in the reports directory: timestamp, whether it was a clean run, the model used, drive free space before/after, and — per category — how much was scanned vs. actually freed (freed is only populated on `-Clean` runs). Before asking the AI for advice, the app loads the last 10 runs and builds a compact summary (drive-space trend, and per category: average MB freed across actual cleans, and how often the AI recommended it) — that summary is appended to the prompt sent to the model, and also shown in the saved `.md` report under "Historical Insights" so you can see exactly what the AI was told.
 
 This means categories that reliably free real space get reinforced over time, and categories the AI keeps suggesting that never actually get cleaned get called out. There's no separate config for this — it's automatic once `history.jsonl` has at least one prior run. Delete `history.jsonl` (or move it aside) to reset the learning.
+
+### AI tool calling (deeper analysis on demand)
+
+Beyond the fixed insights summary above, the model can call two read-only tools mid-conversation if it wants more detail than the summary gives it:
+
+- `get_category_history(label)` — every recorded scanned/freed data point for one category across *all* history (the insights summary only covers the last 10 runs and top 8 categories).
+- `get_disk_space_forecast()` — a simple trend computed from free-space-after across all runs, to gauge urgency.
+
+This is wired through `HuggingFaceClient.GetMaintenanceAdviceAsync`'s optional `toolExecutor` parameter — when given, it sends the tools alongside the prompt and loops (up to 4 round trips) whenever the model responds with `tool_calls` instead of a final answer, executing each locally and feeding the result back. Both tools only read `history.jsonl`; there's no tool that changes anything on the system — cleanup stays something only you trigger via `-Clean`.
+
+Not every provider behind HF's router supports tool calling equally well, so this degrades gracefully: a model that ignores the `tools` field just answers directly with no worse behavior than before tools existed (verified the non-tool-calling wire format is byte-identical whether or not a `toolExecutor` is passed).
 
 ### 4. (Optional) Schedule a weekly run
 

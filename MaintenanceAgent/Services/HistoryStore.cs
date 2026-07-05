@@ -20,7 +20,9 @@ public class HistoryStore
         File.AppendAllText(_path, JsonSerializer.Serialize(record) + Environment.NewLine, System.Text.Encoding.UTF8);
     }
 
-    public List<RunRecord> LoadRecent(int count = 10)
+    public List<RunRecord> LoadRecent(int count = 10) => LoadAll().TakeLast(count).ToList();
+
+    public List<RunRecord> LoadAll()
     {
         if (!File.Exists(_path)) return [];
 
@@ -39,6 +41,6 @@ public class HistoryStore
             }
         }
 
-        return records.TakeLast(count).ToList();
+        return records;
     }
 }
