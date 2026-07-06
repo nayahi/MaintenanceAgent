@@ -148,3 +148,9 @@ and review/enable providers at [huggingface.co/settings/inference-providers](htt
 
 **404 or "model not found" from the HF API**
 The model in `HF_MODEL` (or the default) isn't available on the Inference Providers router at all. Check [supported models](https://huggingface.co/docs/inference-providers) and switch to one that's listed.
+
+**Empty or truncated AI recommendations (no error, just blank/cut-off text)**
+Found and fixed 2026-07-05: reasoning-capable models like GLM-5.2 spend part of their token budget on internal reasoning before the visible answer, and tool-calling rounds add more on top — the original `max_tokens: 800` was truncating real responses (`finish_reason: "length"`) well before the model finished, sometimes leaving 0 visible characters. Bumped to `max_tokens: 2000` in `HuggingFaceClient.SendOnceAsync`. If you still see this, check `finish_reason` isn't `"length"` and consider raising it further for very verbose models.
+
+**402 "You have depleted your monthly included credits"**
+You've used up Hugging Face's free monthly Inference Providers allowance (this happens fast if you're iterating/testing a lot — tool-calling conversations cost more per run since each round trip re-sends the growing conversation). Not a bug: the app surfaces this error as-is rather than silently failing. Options: wait for the monthly reset, purchase pre-paid credits, or subscribe to PRO (20x more included usage) at [huggingface.co/settings/inference-providers](https://huggingface.co/settings/inference-providers).

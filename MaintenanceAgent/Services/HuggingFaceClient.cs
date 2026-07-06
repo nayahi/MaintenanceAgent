@@ -157,7 +157,7 @@ public class HuggingFaceClient
             var message = await SendOnceAsync(model, conversation, tools, ct);
 
             if (toolExecutor == null || message.tool_calls is not { Count: > 0 } toolCalls)
-                return message.content ?? "No response received from the model.";
+                return string.IsNullOrWhiteSpace(message.content) ? "No response received from the model." : message.content;
 
             conversation.Add(message);
             foreach (var call in toolCalls)
@@ -173,7 +173,11 @@ public class HuggingFaceClient
     private async Task<HfMessage> SendOnceAsync(
         string model, List<HfMessage> messages, IReadOnlyList<HfTool>? tools, CancellationToken ct)
     {
-        var request = new HfChatRequest(model, messages, max_tokens: 800, temperature: 0.3f, tools: tools?.ToList());
+        // Reasoning-capable models (e.g. GLM-5.2) spend a chunk of the budget on hidden/visible
+        // reasoning tokens before the actual answer, and tool-calling rounds add more on top of
+        // that -- 800 was truncating real responses (finish_reason: "length") well before the
+        // model finished. 2000 leaves enough headroom for reasoning + tool calls + a full answer.
+        var request = new HfChatRequest(model, messages, max_tokens: 2000, temperature: 0.3f, tools: tools?.ToList());
         using var response = await _http.PostAsJsonAsync(BaseUrl, request, RequestJsonOptions, ct);
 
         if (!response.IsSuccessStatusCode)
