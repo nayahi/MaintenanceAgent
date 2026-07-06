@@ -6,7 +6,7 @@ const string EnvKeyApiKey = "HF_API_KEY";
 const string EnvKeyModel  = "HF_MODEL";
 const string ReportDir    = @"C:\Users\nayah\MaintenanceReports";
 
-var apiKey = Environment.GetEnvironmentVariable(EnvKeyApiKey);
+var apiKey = Environment.GetEnvironmentVariable(EnvKeyApiKey) ?? "HF_API_KEY_ENV_VAR";
 if (string.IsNullOrWhiteSpace(apiKey))
 {
     Console.Error.WriteLine($"ERROR: Environment variable '{EnvKeyApiKey}' is not set.");
