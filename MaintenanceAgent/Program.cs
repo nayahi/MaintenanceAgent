@@ -1,12 +1,33 @@
+// MaintenanceAgent — an AI-assisted Windows maintenance agent.
+// Copyright (C) 2026 Jairo Alberto Zúñiga Gómez
+//
+// This program is free software: you can redistribute it and/or modify it under
+// the terms of the GNU Affero General Public License as published by the Free
+// Software Foundation, either version 3 of the License, or (at your option) any
+// later version. See the LICENSE file at the root of this repository.
+//
+// This program is distributed WITHOUT ANY WARRANTY; without even the implied
+// warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+
+using System.Net.Http.Headers;
 using MaintenanceAgent.Models;
 using MaintenanceAgent.Services;
+using MaintenanceAgent.Services.Tasks;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Http;
 
 // ── Configuration from environment variables ─────────────────────────────────
-const string EnvKeyApiKey = "HF_API_KEY";
-const string EnvKeyModel  = "HF_MODEL";
-const string ReportDir    = @"C:\Users\nayah\MaintenanceReports";
+const string EnvKeyApiKey    = "HF_API_KEY";
+const string EnvKeyModel     = "HF_MODEL";
+const string EnvKeyReportDir = "MAINTENANCE_REPORT_DIR";
 
-var apiKey = Environment.GetEnvironmentVariable(EnvKeyApiKey) ?? "HF_API_KEY_ENV_VAR";
+// Reports land in %USERPROFILE%\MaintenanceReports unless MAINTENANCE_REPORT_DIR overrides it.
+var reportDir = Environment.GetEnvironmentVariable(EnvKeyReportDir) is { Length: > 0 } dir
+    ? dir
+    : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "MaintenanceReports");
+
+// Never hard-code a fallback token here: this file is public, and a committed key is a leaked key.
+var apiKey = Environment.GetEnvironmentVariable(EnvKeyApiKey);
 if (string.IsNullOrWhiteSpace(apiKey))
 {
     Console.Error.WriteLine($"ERROR: Environment variable '{EnvKeyApiKey}' is not set.");
@@ -16,77 +37,61 @@ if (string.IsNullOrWhiteSpace(apiKey))
     return 1;
 }
 
-var model     = Environment.GetEnvironmentVariable(EnvKeyModel) ?? HuggingFaceClient.DefaultModel;
-var cleanMode = args.Contains("--clean", StringComparer.OrdinalIgnoreCase);
+var model   = Environment.GetEnvironmentVariable(EnvKeyModel) ?? HuggingFaceClient.DefaultModel;
+var options = CliArgs.Parse(args);
+
+// ── Composition root ──────────────────────────────────────────────────────────
+var services = new ServiceCollection();
+
+services.AddHttpClient("HuggingFace", c =>
+{
+    c.Timeout = TimeSpan.FromSeconds(90);
+    c.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
+    c.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+});
+
+services.AddSingleton<PowerShellRunner>();
+services.AddSingleton(new HistoryStore(reportDir));
+services.AddSingleton(new ReportWriter(reportDir));
+services.AddSingleton<MaintenanceTools>();
+
+// Registered via a named HttpClient + explicit factory delegate rather than
+// services.AddHttpClient<HuggingFaceClient>(...) (a typed client): ActivatorUtilities would try
+// to resolve the constructor's `string? model` parameter, find nothing registered for it, and
+// silently fall back to null -- discarding the resolved HF_MODEL/default value with no error.
+services.AddSingleton(sp =>
+    new HuggingFaceClient(sp.GetRequiredService<IHttpClientFactory>().CreateClient("HuggingFace"), model));
+
+services.AddSingleton<IMaintenanceTask, DockerCleanupTask>();
+services.AddSingleton<IMaintenanceTask, OneDriveFreeUpTask>();
+services.AddSingleton<IMaintenanceTaskFactory, MaintenanceTaskFactory>();
+services.AddSingleton<MaintenanceOrchestrator>();
+
+await using var provider = services.BuildServiceProvider();
+
+if (args.Contains("--list-tasks", StringComparer.OrdinalIgnoreCase))
+{
+    Console.WriteLine("PS7 baseline (always runs under --clean): scan/clean via Invoke-MaintenanceScan.ps1");
+    foreach (var task in provider.GetServices<IMaintenanceTask>())
+        Console.WriteLine($"  {task.Name,-10} (opt-in: {task.IsOptIn})  {task.Description}");
+    return 0;
+}
+
+// Typo protection: warn about any --task name that doesn't match a registered task.
+var registeredNames = provider.GetServices<IMaintenanceTask>().Select(t => t.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+foreach (var requested in options.RequestedTaskNames.Where(n => !registeredNames.Contains(n)))
+    Console.Error.WriteLine($"WARNING: --task '{requested}' does not match any registered task. Run --list-tasks to see available names.");
 
 Log($"MaintenanceAgent starting");
-Log($"Mode:  {(cleanMode ? "CLEAN (will delete files)" : "SCAN ONLY (read-only)")}");
+Log($"Mode:  {(options.CleanMode ? "CLEAN (will delete files)" : "SCAN ONLY (read-only)")}");
 Log($"Model: {model}");
 
 using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(15));
 
 try
 {
-    // 1. Run the PS7 maintenance scan script ──────────────────────────────────
-    Log("Running PS7 maintenance scan script...");
-    var runner = new PowerShellRunner();
-    var scan   = await runner.RunScanAsync(cleanMode, cts.Token);
-
-    if (!scan.ScriptSucceeded && !string.IsNullOrEmpty(scan.ErrorMessage))
-        Console.Error.WriteLine($"Script stderr:\n{scan.ErrorMessage}");
-
-    Console.WriteLine(scan.RawOutput);
-
-    if (string.IsNullOrWhiteSpace(scan.RawOutput))
-    {
-        Console.Error.WriteLine("ERROR: No output from the scan script. Check that the path is correct.");
-        return 3;
-    }
-
-    // 2. Load run history and build insights from past recommendations vs results ─
-    var historyStore  = new HistoryStore(ReportDir);
-    var recentHistory = historyStore.LoadRecent(10);
-    var insights      = InsightsBuilder.BuildSummary(recentHistory);
-    if (insights != null)
-        Log($"Loaded {recentHistory.Count} past run(s) from history.jsonl to inform this run's recommendations.");
-
-    // 3. Send scan output (+ historical insights) to Hugging Face for AI analysis ─
-    //    Tools let the model pull deeper read-only history data mid-conversation if it wants more
-    //    than the fixed insights summary already gives it.
-    Log($"Sending scan to Hugging Face (preferred model: {model})...");
-    var hfClient   = HuggingFaceClient.Create(apiKey, model);
-    var tools      = new MaintenanceTools(historyStore);
-    var advice     = await hfClient.GetMaintenanceAdviceAsync(
-        scan.RawOutput, insights, toolExecutor: tools.Execute, ct: cts.Token);
-    var usedModel = hfClient.LastUsedModel ?? model;
-    if (usedModel != model)
-        Log($"Preferred model unavailable; fell back to: {usedModel}");
-
-    Console.WriteLine();
-    Console.WriteLine("══ AI RECOMMENDATIONS ══════════════════════════════════════════");
-    Console.WriteLine(advice);
-    Console.WriteLine("════════════════════════════════════════════════════════════════");
-
-    // 4. Record this run to history so future runs can learn from it ────────────
-    if (scan.Summary is { } summary)
-    {
-        historyStore.AppendRun(new RunRecord(
-            summary.Timestamp, summary.CleanMode, usedModel,
-            summary.DriveFreeGBBefore, summary.DriveFreeGBAfter, summary.TotalReclaimableMB,
-            summary.Categories, advice));
-        Log("Run recorded to history.jsonl.");
-    }
-    else
-    {
-        Log("WARNING: scan script did not emit a RUN_SUMMARY_JSON line (older script version?) -- this run was not recorded to history.");
-    }
-
-    // 5. Save combined Markdown report ────────────────────────────────────────
-    var writer     = new ReportWriter(ReportDir);
-    var reportPath = writer.WriteWeeklyReport(scan.RawOutput, advice, usedModel, insights);
-    Log($"Report saved: {reportPath}");
-
-    return 0;
+    var orchestrator = provider.GetRequiredService<MaintenanceOrchestrator>();
+    return await orchestrator.RunAsync(options, cts.Token);
 }
 catch (OperationCanceledException)
 {

@@ -1,3 +1,13 @@
 bin/
 obj/
 .vs/
+
+# Never commit local agent settings or anything holding a token
+.claude/settings.local.json
+*.env
+*.local.json
+appsettings.*.Local.json
+
+# Reports contain machine-specific paths and run history
+MaintenanceReports/
+*.jsonl

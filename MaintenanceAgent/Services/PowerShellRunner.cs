@@ -9,13 +9,28 @@ public class PowerShellRunner
     private readonly string _pwshPath;
     private readonly string _scriptPath;
 
-    public PowerShellRunner(
-        string pwshPath   = @"D:\Program Files\PowerShell\7\pwsh.exe",
-        string scriptPath = @"C:\Users\nayah\Scripts\Invoke-MaintenanceScan.ps1")
+    /// <param name="pwshPath">
+    /// PowerShell 7 executable. Defaults to the MAINTENANCE_PWSH_PATH environment variable,
+    /// then to the PATH-resolved <c>pwsh</c>.
+    /// </param>
+    /// <param name="scriptPath">
+    /// The Invoke-MaintenanceScan.ps1 script. Defaults to the MAINTENANCE_SCRIPT_PATH
+    /// environment variable, then to %USERPROFILE%\Scripts\Invoke-MaintenanceScan.ps1.
+    /// </param>
+    public PowerShellRunner(string? pwshPath = null, string? scriptPath = null)
     {
-        // Fall back to PATH-resolved pwsh if the default path doesn't exist
-        _pwshPath   = File.Exists(pwshPath) ? pwshPath : "pwsh";
-        _scriptPath = scriptPath;
+        var candidate = pwshPath
+            ?? Environment.GetEnvironmentVariable("MAINTENANCE_PWSH_PATH");
+
+        // Fall back to PATH-resolved pwsh if no explicit path exists on disk
+        _pwshPath = !string.IsNullOrWhiteSpace(candidate) && File.Exists(candidate) ? candidate : "pwsh";
+
+        _scriptPath = scriptPath
+            ?? Environment.GetEnvironmentVariable("MAINTENANCE_SCRIPT_PATH")
+            ?? Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                "Scripts",
+                "Invoke-MaintenanceScan.ps1");
     }
 
     public async Task<ScanResult> RunScanAsync(bool cleanMode = false, CancellationToken ct = default)

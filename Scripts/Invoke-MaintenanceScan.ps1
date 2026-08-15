@@ -1,5 +1,10 @@
 #Requires -Version 7.0
 <#
+.NOTES
+    MaintenanceAgent — Copyright (C) 2026 Jairo Alberto Zúñiga Gómez
+    Licensed under the GNU Affero General Public License v3.0 or later.
+    See the LICENSE file at https://github.com/nayahi/MaintenanceAgent
+
 .SYNOPSIS
     Weekly system maintenance scanner and cleaner for Windows 11.
 
@@ -346,13 +351,44 @@ $ConditionalCategories = @(
     },
     [ordered]@{
         Label   = 'Docker aggressive prune (all unused images + volumes)'
-        Warning = 'Removes ALL unused images (even tagged ones like postgres:16 you might reuse) AND unused volumes, which may hold database/app data you still need. Re-pull/re-create needed afterward.'
+        Warning = 'Removes ALL unused images (even tagged ones like postgres:16 you might reuse) AND unused volumes, which may hold database/app data you still need. Re-pull/re-create needed afterward. Also restarts Docker Desktop (via a WSL shutdown) to actually compact its virtual disk -- pruning alone reclaims space inside Docker''s accounting but the VHDX doesn''t shrink, and freed space isn''t returned to the host filesystem, without this. Named/labeled compose volumes (e.g. "myproject_data") are NOT touched by this -- only anonymous ones -- so if you also want those gone, tear down the relevant compose stack yourself first (docker compose down -v in that project''s folder); that step needs human judgment about which stacks are safe to lose and isn''t automated here.'
         Paths   = @()
         Mode    = 'Command'
         Command = {
             $docker = (Get-Command docker -ErrorAction SilentlyContinue)?.Source
             if (-not $docker) { Write-Report "  docker CLI not found, skipping" 'WARN'; return }
-            & $docker system prune -a -f --volumes 2>&1 | ForEach-Object { Write-Report "  docker: $_" }
+            & $docker system prune -a -f --volumes 2>&1  | ForEach-Object { Write-Report "  docker: $_" }
+            & $docker builder prune --all --force 2>&1  | ForEach-Object { Write-Report "  docker: $_" }
+
+            # Pruning only frees space inside Docker's WSL2 VM -- a WSL shutdown (which
+            # requires stopping Docker Desktop first) is what actually compacts the VHDX
+            # and returns the freed space to the host filesystem.
+            $dockerDesktopExe = @(
+                "$env:ProgramFiles\Docker\Docker\Docker Desktop.exe",
+                "${env:ProgramFiles(x86)}\Docker\Docker\Docker Desktop.exe"
+            ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+
+            if (-not $dockerDesktopExe) {
+                Write-Report "  Docker Desktop.exe not found in the usual install paths -- skipping VHDX compact step" 'WARN'
+                return
+            }
+
+            Write-Report "  Stopping Docker Desktop to compact its virtual disk..." 'INFO'
+            Get-Process 'Docker Desktop' -ErrorAction SilentlyContinue | Stop-Process -Force
+            Start-Sleep -Seconds 5
+            wsl --shutdown
+            Start-Sleep -Seconds 3
+
+            Write-Report "  Restarting Docker Desktop..." 'INFO'
+            Start-Process $dockerDesktopExe
+            $ready = $false
+            for ($i = 0; $i -lt 24; $i++) {
+                Start-Sleep -Seconds 5
+                & $docker info *> $null
+                if ($LASTEXITCODE -eq 0) { $ready = $true; break }
+            }
+            if ($ready) { Write-Report "  Docker Desktop back up." 'OK' }
+            else { Write-Report "  Docker Desktop did not come back up within 2 minutes -- check it manually." 'WARN' }
         }
     }
 )

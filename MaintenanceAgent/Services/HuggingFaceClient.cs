@@ -1,4 +1,3 @@
-using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -49,16 +48,6 @@ public class HuggingFaceClient
     {
         _http           = httpClient;
         _preferredModel = model ?? DefaultModel;
-    }
-
-    public static HuggingFaceClient Create(string apiKey, string? model = null)
-    {
-        var http = new HttpClient { Timeout = TimeSpan.FromSeconds(90) };
-        http.DefaultRequestHeaders.Authorization =
-            new AuthenticationHeaderValue("Bearer", apiKey);
-        http.DefaultRequestHeaders.Accept.Add(
-            new MediaTypeWithQualityHeaderValue("application/json"));
-        return new HuggingFaceClient(http, model);
     }
 
     // toolExecutor, if given, lets the model request deeper read-only analysis mid-conversation

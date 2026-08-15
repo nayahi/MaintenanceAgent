@@ -1,5 +1,7 @@
 # MaintenanceAgent
 
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
+
 A .NET 8 console app that orchestrates a weekly Windows maintenance routine:
 
 1. Runs a PowerShell 7 disk-cleanup scan script.
@@ -26,7 +28,16 @@ $env:HF_API_KEY = 'hf_YOUR_TOKEN_HERE'
 # Must be a model ID available on Hugging Face's Inference Providers router:
 # https://huggingface.co/docs/inference-providers
 $env:HF_MODEL = 'zai-org/GLM-5.2'
+
+# Optional — paths. Defaults shown; set these only if your layout differs.
+$env:MAINTENANCE_REPORT_DIR  = "$env:USERPROFILE\MaintenanceReports"
+$env:MAINTENANCE_SCRIPT_PATH = "$env:USERPROFILE\Scripts\Invoke-MaintenanceScan.ps1"
+$env:MAINTENANCE_PWSH_PATH   = 'C:\Program Files\PowerShell\7\pwsh.exe'  # else PATH-resolved `pwsh`
 ```
+
+> **There is no hard-coded fallback token.** If `HF_API_KEY` is unset the app exits with
+> a clear error rather than running. Never commit a key to this repository — a committed
+> key is a leaked key, even in a private repo.
 
 If the preferred model comes back `model_not_supported`, the app automatically retries the next model in `HuggingFaceClient.FallbackModels` (ordered by how many providers serve it) instead of failing — see [Troubleshooting](#troubleshooting) for the full list and how to check coverage for other models.
 
@@ -40,12 +51,13 @@ Alternatively, set it as a user or system environment variable via `sysdm.cpl` >
 
 ### 2. PowerShell script setup
 
-By default, `PowerShellRunner` expects:
+By default, `PowerShellRunner` resolves:
 
-- `pwsh.exe` at `D:\Program Files\PowerShell\7\pwsh.exe` (falls back to the PATH-resolved `pwsh` if not found there)
-- The scan script at `C:\Users\nayah\Scripts\Invoke-MaintenanceScan.ps1`
+- `pwsh.exe` from `MAINTENANCE_PWSH_PATH`, falling back to the PATH-resolved `pwsh`
+- The scan script from `MAINTENANCE_SCRIPT_PATH`, falling back to `%USERPROFILE%\Scripts\Invoke-MaintenanceScan.ps1`
 
-If your paths differ, update the constructor defaults in `MaintenanceAgent/Services/PowerShellRunner.cs`.
+Set those environment variables if your layout differs — no source edit needed. A copy of the
+script also ships in this repository under `Scripts/`.
 
 The scan script supports these switches:
 
@@ -114,8 +126,10 @@ dotnet build
 # Scan only (read-only, default)
 dotnet run --project MaintenanceAgent
 
-# Clean mode (deletes cache/temp files found by the scan)
-dotnet run --project MaintenanceAgent -- --clean
+# Clean mode (deletes cache/temp files found by the scan) -- left commented out on
+# purpose so a casual copy-paste of this block never deletes anything by accident.
+# Uncomment (drop the leading '#') whenever you actually want to free space:
+# dotnet run --project MaintenanceAgent -- --clean
 ```
 
 Output includes the raw scan results, AI-generated recommendations, and the path to the saved Markdown report.
@@ -154,3 +168,25 @@ Found and fixed 2026-07-05: reasoning-capable models like GLM-5.2 spend part of 
 
 **402 "You have depleted your monthly included credits"**
 You've used up Hugging Face's free monthly Inference Providers allowance (this happens fast if you're iterating/testing a lot — tool-calling conversations cost more per run since each round trip re-sends the growing conversation). Not a bug: the app surfaces this error as-is rather than silently failing. Options: wait for the monthly reset, purchase pre-paid credits, or subscribe to PRO (20x more included usage) at [huggingface.co/settings/inference-providers](https://huggingface.co/settings/inference-providers).
+
+## Safety model
+
+This agent runs with real permissions on a real machine, so the design is deliberately conservative:
+
+- **Read-only by default.** A plain run only *reports* reclaimable space. Deleting requires the explicit `-Clean` flag.
+- **`-WhatIf` is a genuine dry run.** Every category is wrapped in a `ShouldProcess` gate — including the ones that shell out to `docker` and `Dism.exe`, which don't understand PowerShell's `-WhatIf` themselves.
+- **Destructive categories are opt-in and labelled.** The five conditional categories each carry a written warning stating exactly what you lose.
+- **The model cannot delete anything.** The two tools exposed to the LLM (`get_category_history`, `get_disk_space_forecast`) are strictly read-only. The model can advise; only a human can trigger `-Clean`.
+- **No hard-coded credentials.** The API key comes from the environment or the app refuses to start.
+
+## License
+
+Copyright (C) 2026 Jairo Alberto Zúñiga Gómez.
+
+Licensed under the **GNU Affero General Public License v3.0 or later** (AGPL-3.0-or-later).
+You may use, study, modify and redistribute this software. If you modify it and offer it to
+others — including as a network or hosted service — you must publish your modified source
+under the same license. See [LICENSE](LICENSE) for the full text.
+
+As the sole copyright holder, the author may also grant separate commercial licenses.
+For commercial licensing enquiries, open an issue on this repository.
